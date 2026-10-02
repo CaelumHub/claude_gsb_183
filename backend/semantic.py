@@ -101,7 +101,7 @@ class SemanticAnalyzer:
                 fn.line, fn.column, self._line(fn)))
             return None
         s = sym.Symbol(fn.name, sym.KIND_FUNCTION, self.symbols.global_scope,
-                       line=fn.line, column=fn.column, symbol_type=sym.TYPE_FUNC)
+                       line=fn.name_line, column=fn.name_column, symbol_type=sym.TYPE_FUNC)
         s.arity = len(fn.params)      # 记录形参个数，供调用处做参数个数检查
         self.symbols.global_scope.define(s)
         fn.symbol = s
@@ -115,15 +115,21 @@ class SemanticAnalyzer:
     def _function_body(self, fn: ast.FunctionDecl):
         # 形参
         seen = set()
+        param_symbols = []
         for i, p in enumerate(fn.params):
             if p in seen:
                 self.diagnostics.add(semantic_redeclared(p, fn.line, fn.line, fn.column, self._line(fn)))
                 continue
             seen.add(p)
+            pline, pcol = fn.line, fn.column
+            if i < len(fn.param_positions):
+                pline, pcol = fn.param_positions[i]
             s = sym.Symbol(p, sym.KIND_PARAMETER, self.current_scope,
-                           line=fn.line, column=fn.column, symbol_type=sym.TYPE_UNKNOWN)
+                           line=pline, column=pcol, symbol_type=sym.TYPE_UNKNOWN)
             s.param_index = i
             self.current_scope.define(s)
+            param_symbols.append(s)
+        fn.param_symbols = param_symbols
         self._analyze_block(fn.body)
 
     # ------------------------------------------------------------------
@@ -200,8 +206,8 @@ class SemanticAnalyzer:
             self.diagnostics.add(warning_shadowing(
                 decl.name, outer.line, decl.line, decl.column, self._line(decl)))
         s = sym.Symbol(decl.name, sym.KIND_VARIABLE, self.current_scope,
-                       line=decl.line, column=decl.column, symbol_type=decl.expr_type,
-                       is_const=decl.is_const)
+                       line=decl.name_line, column=decl.name_column,
+                       symbol_type=decl.expr_type, is_const=decl.is_const)
         self.current_scope.define(s)
         decl.symbol = s
 
@@ -248,6 +254,12 @@ class SemanticAnalyzer:
             return e.expr_type
         if isinstance(e, ast.Identifier):
             return self._identifier(e)
+        if isinstance(e, ast.AssignStmt):
+            # 赋值是表达式（parser 把它包在 ExprStmt / for 增量里），
+            # 这里接上 _assign，让赋值目标完成符号绑定与常量检查
+            self._assign(e)
+            e.expr_type = getattr(e.target, "expr_type", None) or sym.TYPE_UNKNOWN
+            return e.expr_type
         if isinstance(e, ast.UnaryExpr):
             t = self._expr(e.operand)
             if e.op == "!":

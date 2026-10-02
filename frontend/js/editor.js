@@ -19,13 +19,23 @@
 
   /* ----------------------------------------------------------
    * 词法着色：把 MiniLang 源码转成带高亮的 HTML
+   * marks（可选）：{ refs: Set("行:列"), defs: Set("行:列") }
+   *   命中位置的标识符额外套上 tk-ref / tk-def，用于定义跳转后的
+   *   引用位置高亮。
    * ---------------------------------------------------------- */
   ML.Highlighter = {
-    highlight(code) {
+    highlight(code, marks) {
       const esc = ML.escapeHtml;
       let out = "";
       let i = 0;
+      let line = 1, col = 1;   // 当前字符的 1-based 行/列
       const n = code.length;
+      // 消费一段文本，推进行列位置
+      const bump = (text) => {
+        for (let k = 0; k < text.length; k++) {
+          if (text[k] === "\n") { line++; col = 1; } else col++;
+        }
+      };
       while (i < n) {
         const ch = code[i];
         // 行注释
@@ -33,6 +43,7 @@
           let j = i;
           while (j < n && code[j] !== "\n") j++;
           out += '<span class="tk-com">' + esc(code.slice(i, j)) + "</span>";
+          bump(code.slice(i, j));
           i = j;
           continue;
         }
@@ -41,6 +52,7 @@
           let j = code.indexOf("*/", i + 2);
           j = j === -1 ? n : j + 2;
           out += '<span class="tk-com">' + esc(code.slice(i, j)) + "</span>";
+          bump(code.slice(i, j));
           i = j;
           continue;
         }
@@ -54,6 +66,7 @@
             j++;
           }
           out += '<span class="tk-str">' + esc(code.slice(i, j)) + "</span>";
+          bump(code.slice(i, j));
           i = j;
           continue;
         }
@@ -62,6 +75,7 @@
           const m = code.slice(i).match(/^(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+)/);
           if (m) {
             out += '<span class="tk-num">' + esc(m[0]) + "</span>";
+            bump(m[0]);
             i += m[0].length;
             continue;
           }
@@ -74,7 +88,14 @@
           let cls = "tk-ident";
           if (KEYWORDS.has(word)) cls = "tk-kw";
           else if (BUILTINS.has(word)) cls = "tk-bi";
-          out += '<span class="' + cls + '">' + esc(word) + "</span>";
+          let mark = "";
+          if (marks && cls !== "tk-kw") {
+            const key = line + ":" + col;
+            if (marks.defs && marks.defs.has(key)) mark = " tk-def";
+            else if (marks.refs && marks.refs.has(key)) mark = " tk-ref";
+          }
+          out += '<span class="' + cls + mark + '">' + esc(word) + "</span>";
+          bump(word);
           i = j;
           continue;
         }
@@ -82,15 +103,18 @@
         const two = code.slice(i, i + 2);
         if (DOUBLE_OPS.includes(two)) {
           out += '<span class="tk-op">' + esc(two) + "</span>";
+          bump(two);
           i += 2;
           continue;
         }
         if (SINGLE_OPS.includes(ch)) {
           out += '<span class="tk-op">' + esc(ch) + "</span>";
+          bump(ch);
           i += 1;
           continue;
         }
         out += esc(ch);
+        bump(ch);
         i += 1;
       }
       return out;
@@ -128,6 +152,7 @@
      *   onBreakpointChange: (line, active) => void
      *   onValueChange: (value) => void
      *   autocomplete: 是否启用自动补全（默认 true）
+     *   navigation: 是否启用定义跳转（Ctrl/⌘+点击、F12，默认 true）
      */
     constructor(container, opts) {
       opts = opts || {};
@@ -136,12 +161,18 @@
       this.onBreakpointChange = opts.onBreakpointChange || null;
       this.onValueChange = opts.onValueChange || null;
       this.autocomplete = opts.autocomplete !== false;
+      this.navigation = opts.navigation !== false;
       this._bps = new Set();
       this._tabSize = 4;
       this._charW = null;
       this._acBox = null;
       this._acSel = 0;
       this._acItems = [];
+      this._refMarks = null;   // { refs:Set, defs:Set } 引用位置高亮
+      this._refPanel = null;   // 引用列表面板元素
+      this._refData = [];
+      this._navBusy = false;
+      this._flashLineNo = 0;
       this._buildDom(opts);
     }
 
@@ -167,6 +198,9 @@
       this.curLine.className = "cur-line";
       this.curLine.style.display = "none";
 
+      this.flashLine = document.createElement("div");
+      this.flashLine.className = "flash-line";
+
       this.ta = document.createElement("textarea");
       this.ta.className = "src";
       this.ta.spellcheck = false;
@@ -177,6 +211,7 @@
       const area = document.createElement("div");
       area.className = "code-area";
       area.appendChild(this.hl);
+      area.appendChild(this.flashLine);
       area.appendChild(this.curLine);
       area.appendChild(this.ta);
 
@@ -191,12 +226,21 @@
 
     _bindEvents() {
       this.ta.addEventListener("input", () => {
+        this._clearRefMarks();
+        this._closeRefPanel();
         this._render();
         if (this.onValueChange) this.onValueChange(this.getValue());
       });
       this.ta.addEventListener("scroll", () => this._syncScroll());
       this.ta.addEventListener("keydown", (e) => this._onKeydown(e));
-      this.ta.addEventListener("click", () => this._closeAC());
+      this.ta.addEventListener("click", (e) => {
+        this._closeAC();
+        // Ctrl+点击（Mac 为 ⌘+点击）跳转到定义
+        if (this.navigation && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          this._goToDefinition();
+        }
+      });
       this.ta.addEventListener("blur", () => setTimeout(() => this._closeAC(), 150));
 
       if (this.breakpointsEnabled) {
@@ -241,7 +285,7 @@
 
     /* ---------------- 渲染 ---------------- */
     _render() {
-      this.hlInner.innerHTML = ML.Highlighter.highlight(this.ta.value) || "​";
+      this.hlInner.innerHTML = ML.Highlighter.highlight(this.ta.value, this._refMarks) || "​";
       this._renderGutter();
       this._syncScroll();
     }
@@ -263,6 +307,9 @@
       this.gutterInner.style.transform = `translateY(${-st}px)`;
       const cur = parseInt(this.ta.dataset.curLine || "0", 10);
       if (cur) this._placeCurLine(cur);
+      if (this._flashLineNo && this.flashLine.classList.contains("on")) {
+        this.flashLine.style.top = (12 + (this._flashLineNo - 1) * 20 - st) + "px";
+      }
     }
 
     _placeCurLine(line) {
@@ -272,6 +319,17 @@
 
     /* ---------------- 键盘 / 补全 ---------------- */
     _onKeydown(e) {
+      // F12：跳转到定义；Esc：关闭引用面板
+      if (this.navigation && e.key === "F12") {
+        e.preventDefault();
+        this._goToDefinition();
+        return;
+      }
+      if (e.key === "Escape" && this._refPanel) {
+        e.preventDefault();
+        this._closeRefPanel();
+        return;
+      }
       if (this._acBox && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) {
         if (e.key === "ArrowDown") { e.preventDefault(); this._moveAC(1); return; }
         if (e.key === "ArrowUp") { e.preventDefault(); this._moveAC(-1); return; }
@@ -409,6 +467,131 @@
       this._acItems = [];
     }
 
+    /* ---------------- 定义跳转 / 引用查找 ---------------- */
+    /* 跳转到光标处标识符的定义，并列出该符号的全部使用位置。
+       解析由后端基于符号表与作用域完成（/api/definition）。 */
+    async _goToDefinition() {
+      if (this._navBusy) return;
+      const { line, col } = this._cursor();   // 0-based 行 / 光标列
+      this._navBusy = true;
+      let data = null;
+      try {
+        data = await ML.api.definition(this.getValue(), line + 1, col + 1);
+      } catch (err) { data = null; }
+      this._navBusy = false;
+      const r = data && data.result;
+      if (!r || !r.found) {
+        this._clearRefMarks();
+        this._closeRefPanel();
+        this._render();
+        ML.toast((r && r.message) || "此处没有可跳转的定义", "err");
+        return;
+      }
+      this._setRefMarks(r);
+      if (r.definition) {
+        this.revealPosition(r.definition.line, r.definition.column);
+      } else if (r.message) {
+        ML.toast(r.message);   // 例如内置函数没有源码定义
+      }
+      this._showRefPanel(r);
+    }
+
+    /* 把光标移动到 (line, column)（1-based），滚动到可见并闪烁该行 */
+    revealPosition(line, column) {
+      const lines = this.ta.value.split("\n");
+      line = Math.max(1, Math.min(line, lines.length));
+      let pos = 0;
+      for (let i = 0; i < line - 1; i++) pos += lines[i].length + 1;
+      pos += Math.max(0, (column || 1) - 1);
+      pos = Math.min(pos, this.ta.value.length);
+      this.ta.focus();
+      this.ta.setSelectionRange(pos, pos);
+      const lineH = 20;
+      const y = (line - 1) * lineH;
+      const viewH = this.ta.clientHeight;
+      if (y < this.ta.scrollTop + lineH || y > this.ta.scrollTop + viewH - lineH * 2) {
+        this.ta.scrollTop = Math.max(0, y - Math.floor(viewH / 2));
+      }
+      this._syncScroll();
+      this._flashLine(line);
+    }
+
+    _flashLine(line) {
+      this._flashLineNo = line;
+      this.flashLine.style.top = (12 + (line - 1) * 20 - this.ta.scrollTop) + "px";
+      this.flashLine.classList.remove("on");
+      void this.flashLine.offsetWidth;   // 重新触发动画
+      this.flashLine.classList.add("on");
+    }
+
+    _setRefMarks(r) {
+      const marks = { refs: new Set(), defs: new Set() };
+      (r.references || []).forEach((ref) => {
+        const key = ref.line + ":" + ref.column;
+        if (ref.role === "decl") marks.defs.add(key);
+        else marks.refs.add(key);
+      });
+      this._refMarks = marks;
+      this._render();
+    }
+
+    _clearRefMarks() {
+      this._refMarks = null;
+    }
+
+    /* 引用列表：头部为符号信息，下面逐行列出所有使用位置，点击即跳转 */
+    _showRefPanel(r) {
+      this._closeRefPanel();
+      const refs = r.references || [];
+      const sym = r.symbol || {};
+      const kindLabel = { variable: "变量", parameter: "形参", function: "函数", builtin: "内置函数" }[sym.kind] || sym.kind || "";
+      const roleLabel = { decl: "声明", read: "读取", write: "写入", call: "调用" };
+      const scopeLabel = { global: "全局", function: "函数 " + (sym.scope || ""), block: "块" }[sym.scope_type] || sym.scope || "";
+      const lines = this.getValue().split("\n");
+
+      let html = `<div class="rp-head">` +
+        `<span class="rp-name">${ML.escapeHtml(r.name || "")}</span>` +
+        (kindLabel ? ML.badge(kindLabel, "purple") : "") +
+        (sym.type && sym.type !== "unknown" ? ML.badge(sym.type, "cyan") : "") +
+        (scopeLabel ? `<span class="muted" style="font-size:11px">${ML.escapeHtml(scopeLabel)}</span>` : "") +
+        `<span class="muted" style="font-size:11px">${refs.length} 个位置</span>` +
+        `<span class="rp-x" title="关闭 (Esc)">×</span></div>`;
+      html += '<div class="rp-list">';
+      refs.forEach((ref, i) => {
+        const raw = lines[ref.line - 1] || "";
+        const c0 = Math.max(0, ref.column - 1);
+        const c1 = c0 + (ref.length || (r.name || "").length);
+        html += `<div class="rp-item" data-i="${i}">` +
+          `<span class="rp-ln">L${ref.line}</span>` +
+          `<span class="rp-role rp-${ref.role}">${roleLabel[ref.role] || ref.role}</span>` +
+          `<span class="rp-src">${ML.escapeHtml(raw.slice(0, c0))}<b>${ML.escapeHtml(raw.slice(c0, c1))}</b>${ML.escapeHtml(raw.slice(c1))}</span>` +
+          `</div>`;
+      });
+      html += "</div>";
+
+      const panel = document.createElement("div");
+      panel.className = "ref-panel";
+      panel.innerHTML = html;
+      this.wrap.appendChild(panel);
+      this._refPanel = panel;
+      this._refData = refs;
+      panel.querySelector(".rp-x").addEventListener("click", () => this._closeRefPanel());
+      panel.querySelectorAll(".rp-item").forEach((el) => {
+        el.addEventListener("click", () => {
+          const ref = this._refData[parseInt(el.dataset.i, 10)];
+          if (ref) this.revealPosition(ref.line, ref.column);
+        });
+      });
+    }
+
+    _closeRefPanel() {
+      if (this._refPanel && this._refPanel.parentNode) {
+        this._refPanel.parentNode.removeChild(this._refPanel);
+      }
+      this._refPanel = null;
+      this._refData = [];
+    }
+
     _charWidth() {
       if (this._charW != null) return this._charW;
       const cs = getComputedStyle(this.ta);
@@ -420,6 +603,7 @@
 
     destroy() {
       this._closeAC();
+      this._closeRefPanel();
       if (this.wrap && this.wrap.parentNode) this.wrap.parentNode.removeChild(this.wrap);
     }
   };

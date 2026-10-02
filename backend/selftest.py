@@ -45,6 +45,7 @@ def run_all():
     _test_lexer()
     _test_parser()
     _test_semantic()
+    _test_navigation()
     _test_vm_basic()
     _test_functions_recursion()
     _test_control_flow()
@@ -98,6 +99,63 @@ def _test_semantic():
     ok2 = any("2 个参数" in e.message or "需要 2" in e.message for e in errs2)
     _check("语义分析：参数个数不匹配报错", ok2,
            str([e.message for e in errs2]) if not ok2 else "")
+
+
+def _test_navigation():
+    from . import navigation
+
+    # 1) 变量：定义位置 + 引用分类（声明/读取/写入）
+    src = "var x = 1;\nvar y = x + 1;\nx = y;\nprint(x);"
+    r = navigation.definition_at(src, 2, 9)   # 第 2 行 "var y = x + 1;" 中的 x
+    roles = sorted(ref["role"] for ref in r["references"])
+    ok = (r["found"] and r["definition"] == {"line": 1, "column": 5, "length": 1}
+          and roles == ["decl", "read", "read", "write"])
+    _check("定义跳转：变量定义位置与读/写/声明分类", ok, str(r))
+
+    # 2) 同名遮蔽：内层 var 遮蔽全局变量
+    src2 = "var x = 1;\nfunc f() {\n    var x = 2;\n    print(x);\n}\nprint(x);\nf();"
+    r2 = navigation.definition_at(src2, 4, 11)      # 内层 print(x)
+    r2b = navigation.definition_at(src2, 6, 7)      # 外层 print(x)
+    ok2 = (r2["found"] and r2["definition"]["line"] == 3
+           and r2b["found"] and r2b["definition"]["line"] == 1)
+    _check("定义跳转：同名遮蔽解析到正确作用域", ok2, f"{r2['definition']} / {r2b['definition']}")
+
+    # 3) 形参与全局变量同名：函数体内解析到形参，函数外解析到全局
+    src3 = "var n = 10;\nfunc g(n) {\n    return n + 1;\n}\nprint(g(n));"
+    r3 = navigation.definition_at(src3, 3, 12)      # return n -> 形参
+    r3b = navigation.definition_at(src3, 5, 10)     # print(g(n)) 的 n -> 全局
+    ok3 = (r3["found"] and r3["symbol"]["kind"] == "parameter"
+           and r3["definition"] == {"line": 2, "column": 8, "length": 1}
+           and r3b["found"] and r3b["definition"]["line"] == 1)
+    _check("定义跳转：形参遮蔽全局变量", ok3, f"{r3['definition']} / {r3b['definition']}")
+
+    # 4) 函数调用与变量读取的区分
+    src4 = "func h(a) { return a; }\nvar h2 = h(1);\nprint(h);"
+    r4 = navigation.definition_at(src4, 2, 10)      # h(1) 调用处
+    roles4 = sorted(ref["role"] for ref in r4["references"])
+    ok4 = (r4["found"] and r4["symbol"]["kind"] == "function"
+           and r4["definition"]["line"] == 1 and roles4 == ["call", "decl", "read"])
+    _check("定义跳转：函数调用与变量使用区分", ok4, str(r4["references"]))
+
+    # 5) 点击声明点本身（变量名 / 形参名 / 函数名）
+    r5 = navigation.definition_at(src3, 2, 8)       # 形参 n 的声明点
+    r5b = navigation.definition_at(src3, 2, 6)      # 函数名 g 的声明点
+    ok5 = (r5["found"] and r5["symbol"]["kind"] == "parameter"
+           and r5b["found"] and r5b["symbol"]["kind"] == "function"
+           and r5b["definition"]["line"] == 2)
+    _check("定义跳转：声明点（形参/函数名）自身可解析", ok5, str(r5b))
+
+    # 6) 内置函数：无源码定义，但列出调用点
+    r6 = navigation.definition_at("print(len([1]));", 1, 8)
+    ok6 = (r6["found"] and r6["definition"] is None
+           and r6["symbol"]["kind"] == "builtin" and len(r6["references"]) == 1)
+    _check("定义跳转：内置函数无源码定义但列出调用点", ok6, str(r6))
+
+    # 7) 未定义标识符 / 非标识符位置
+    r7 = navigation.definition_at("print(qqq);", 1, 8)
+    r7b = navigation.definition_at("var x = 1;", 1, 2)
+    ok7 = (not r7["found"] and not r7b["found"])
+    _check("定义跳转：未定义标识符与空位置返回未找到", ok7, f"{r7['found']} {r7b['found']}")
 
 
 def _test_vm_basic():

@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 from . import config
 from . import storage
 from . import compiler as compiler_mod
+from . import navigation as navigation_mod
 from . import vm as vm_mod
 from . import debugger as debugger_mod
 from . import profiler as profiler_mod
@@ -248,6 +249,18 @@ class Service:
             view["bytecode"] = result.bytecode.to_dict()
             view["bytecode"]["functions"].reverse()
         return view
+
+    # ==================================================================
+    # 定义跳转 / 引用查找
+    # ==================================================================
+    def definition_at(self, source, line, column):
+        """编辑器"跳转到定义"：解析 (line, column) 处标识符的定义与全部引用。"""
+        try:
+            line = max(1, int(line))
+            column = max(1, int(column))
+        except (TypeError, ValueError):
+            line, column = 1, 1
+        return navigation_mod.definition_at(source or "", line, column)
 
     # ==================================================================
     # 运行（普通 / 性能剖析）

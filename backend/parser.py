@@ -136,13 +136,17 @@ class Parser:
             self._error_here("函数定义缺少函数名", "在 func 后面跟一个合法的函数名。")
             self._sync()
             return None
-        name = self._advance().text
+        name_tok = self._advance()
+        name = name_tok.text
         self._expect(T.LPAREN, "函数定义")
         params = []
+        param_positions = []
         if not self._check(T.RPAREN):
             while True:
                 if self._check(T.IDENT):
-                    params.append(self._advance().text)
+                    ptok = self._advance()
+                    params.append(ptok.text)
+                    param_positions.append((ptok.line, ptok.column))
                 else:
                     self._error_here("形参必须是标识符", "参数名用合法标识符。")
                     if self._check(T.EOF) or self._check(T.RPAREN):
@@ -156,7 +160,9 @@ class Parser:
         body = self._block()
         if body is None:
             body = ast.Block([], start.line, start.column)
-        return ast.FunctionDecl(name, params, body, start.line, start.column)
+        return ast.FunctionDecl(name, params, body, start.line, start.column,
+                                name_line=name_tok.line, name_column=name_tok.column,
+                                param_positions=param_positions)
 
     # ------------------------------------------------------------------
     # 语句
@@ -232,7 +238,8 @@ class Parser:
                 self._error_here("变量初始化缺少表达式", "在 = 后面写一个表达式。")
         if consume_semi:
             self._expect(T.SEMICOLON, "变量声明")
-        return ast.VarDecl(name_tok.text, initializer, start.line, start.column)
+        return ast.VarDecl(name_tok.text, initializer, start.line, start.column,
+                           name_line=name_tok.line, name_column=name_tok.column)
 
     def _if_stmt(self):
         start = self._advance()  # if

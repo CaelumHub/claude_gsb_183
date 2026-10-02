@@ -225,11 +225,15 @@ class Block(Stmt):
 class VarDecl(Stmt):
     type_name = "VarDecl"
 
-    def __init__(self, name, initializer, line=1, column=1, is_const=False):
+    def __init__(self, name, initializer, line=1, column=1, is_const=False,
+                 name_line=None, name_column=None):
         super().__init__(line, column)
         self.name = name
         self.initializer = initializer  # Expr or None
         self.is_const = is_const
+        # 变量名自身的精确位置（line/column 是 var 关键字的位置）
+        self.name_line = name_line or line
+        self.name_column = name_column or column
         self.symbol = None
 
     def to_dict(self):
@@ -367,12 +371,18 @@ class ContinueStmt(Stmt):
 class FunctionDecl(Node):
     type_name = "FunctionDecl"
 
-    def __init__(self, name, params, body, line=1, column=1):
+    def __init__(self, name, params, body, line=1, column=1,
+                 name_line=None, name_column=None, param_positions=None):
         super().__init__(line, column)
         self.name = name
         self.params = params        # List[str]
         self.body = body            # Block
+        # 函数名与每个形参的精确位置（line/column 是 func 关键字的位置）
+        self.name_line = name_line or line
+        self.name_column = name_column or column
+        self.param_positions = param_positions or []   # List[(line, column)]
         self.symbol = None
+        self.param_symbols = []     # 语义分析填充：形参名字 -> 符号表条目
 
     def to_dict(self):
         d = super().to_dict()
