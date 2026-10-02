@@ -44,6 +44,7 @@ class Symbol:
                  mutable=True, is_const=False):
         self.name = name
         self.kind = kind
+        self.sid = 0             # 稳定 id（语义分析阶段分配），供"定义跳转"在前端对应使用点
         self.scope = scope          # 所属 Scope
         self.line = line
         self.column = column

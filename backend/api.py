@@ -158,6 +158,11 @@ class Handler(BaseHTTPRequestHandler):
             out = svc.run(body.get("source", ""), opts)
             return self._json(200, {"ok": True, "result": out})
 
+        # ---- 定义跳转 / 引用查找 ----
+        if path == "/api/navigate" and method == "POST":
+            view = svc.navigate(body.get("source", ""))
+            return self._json(200, {"ok": True, "result": view})
+
         # ---- 调试 ----
         if path == "/api/debug/start" and method == "POST":
             state = svc.debug_start(body.get("source", ""), body.get("breakpoints", []),

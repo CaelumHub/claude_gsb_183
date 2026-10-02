@@ -276,6 +276,79 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ac-box .item .t { font-family: var(--mono); }
 .ac-box .item .k { color: var(--text-faint); font-size: 11px; }
 
+/* ---------- 定义跳转 / 引用查找 ---------- */
+/* 已解析标识符：虚下划线提示可点击（Ctrl/悬停时变为指针） */
+.editor-wrap .hl-inner .id-resolved {
+  text-decoration: underline dotted rgba(79, 70, 229, .55);
+  text-underline-offset: 3px;
+  border-radius: 3px;
+}
+.editor-wrap .hl-inner .id-resolved.id-unresolved {
+  text-decoration-color: var(--warning);
+}
+.editor-wrap textarea.src.nav-ctrl { cursor: pointer; }
+/* 出现位置标记层（与高亮层重叠，不拦截鼠标） */
+.nav-marks {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden;
+}
+.nav-marks .nav-mark {
+  position: absolute; border-radius: 3px;
+}
+.nav-marks .mk-decl {
+  background: rgba(79, 70, 229, .16);
+  box-shadow: inset 0 0 0 1px rgba(79, 70, 229, .45);
+}
+.nav-marks .mk-call { background: rgba(8, 145, 178, .16); box-shadow: inset 0 0 0 1px rgba(8, 145, 178, .4); }
+.nav-marks .mk-assign { background: rgba(217, 119, 6, .16); box-shadow: inset 0 0 0 1px rgba(217, 119, 6, .45); }
+.nav-marks .mk-use { background: rgba(37, 99, 235, .13); }
+.nav-marks .mk-unresolved { background: rgba(217, 119, 6, .14); box-shadow: inset 0 0 0 1px rgba(217, 119, 6, .4); }
+/* 跳转落点行闪烁 */
+.nav-flash {
+  display: none; position: absolute; left: 0; right: 0; height: 20px; z-index: 4;
+  pointer-events: none; background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.nav-flash.play { animation: navflash 1.15s ease-out forwards; }
+@keyframes navflash {
+  0% { background: rgba(8, 145, 178, .35); }
+  100% { background: transparent; }
+}
+/* 引用列表面板 */
+.nav-panel {
+  margin-top: 10px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  max-height: 340px; overflow-y: auto;
+}
+.nav-panel .nav-head {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.nav-panel .nav-title { font-size: 14px; font-weight: 700; color: var(--primary); }
+.nav-panel .nav-count { font-size: 12px; }
+.nav-panel .nav-section {
+  padding: 7px 12px 3px; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  color: var(--text-faint); text-transform: uppercase;
+}
+.nav-panel .nav-row {
+  display: flex; align-items: baseline; gap: 10px; padding: 4px 12px;
+  cursor: pointer; border-left: 2px solid transparent; font-size: 12.5px;
+}
+.nav-panel .nav-row:hover { background: var(--primary-soft); border-left-color: var(--primary); }
+.nav-panel .nav-row.nav-builtin { cursor: default; }
+.nav-panel .nav-row.nav-builtin:hover { background: transparent; border-left-color: transparent; }
+.nav-panel .nav-role { flex: 0 0 auto; width: 52px; text-align: center; }
+.nav-panel .nav-loc { flex: 0 0 auto; width: 64px; color: var(--text-faint); font-size: 11.5px; }
+.nav-panel .nav-code {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px;
+  white-space: pre; overflow: hidden; text-overflow: ellipsis; color: var(--text);
+}
+.nav-panel .nav-code .nav-hit {
+  background: var(--primary-soft); color: var(--primary); font-weight: 700; border-radius: 3px;
+}
+.nav-panel .nav-hint { padding: 8px 12px; font-size: 11.5px; border-top: 1px solid var(--border); }
+.nav-panel .nav-hint kbd { font-size: 10px; }
+
 /* ---------- AST 树 ---------- */
 .ast-tree ul { list-style: none; padding-left: 18px; border-left: 1px solid var(--border); margin-left: 8px; }
 .ast-tree > ul { border-left: none; margin-left: 0; padding-left: 0; }

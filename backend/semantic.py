@@ -48,13 +48,41 @@ class SemanticAnalyzer:
         self.current_function = None
         self.loop_depth = 0
         self.source_lines = []
+        # "定义跳转 / 引用查找"的原料：
+        #   usages     —— 每个成功解析的名字使用点（按遍历顺序）
+        #   unresolved —— 解析失败（未定义）的名字使用点
+        self.usages = []
+        self.unresolved = []
+        self._sid_seq = 0
         self._builtin_symbols = self._declare_builtins()
+
+    def _new_sid(self):
+        self._sid_seq += 1
+        return self._sid_seq
+
+    def _record_usage(self, symbol, node, role):
+        """记录一次名字使用：role 为 read（变量使用）/ call（函数调用）/ assign（赋值目标）。"""
+        self.usages.append({
+            "sid": symbol.sid,
+            "name": symbol.name,
+            "line": node.line,
+            "column": node.column,
+            "role": role,
+        })
+
+    def _record_unresolved(self, node):
+        self.unresolved.append({
+            "name": node.name,
+            "line": node.line,
+            "column": node.column,
+        })
 
     def _declare_builtins(self):
         builtins = {}
         for name in BUILTIN_SIGNATURES:
             s = sym.Symbol(name, sym.KIND_BUILTIN, self.symbols.global_scope,
                            symbol_type=sym.TYPE_FUNC)
+            s.sid = self._new_sid()
             self.symbols.global_scope.define(s)
             builtins[name] = s
         return builtins
@@ -101,7 +129,8 @@ class SemanticAnalyzer:
                 fn.line, fn.column, self._line(fn)))
             return None
         s = sym.Symbol(fn.name, sym.KIND_FUNCTION, self.symbols.global_scope,
-                       line=fn.line, column=fn.column, symbol_type=sym.TYPE_FUNC)
+                       line=fn.name_line, column=fn.name_column, symbol_type=sym.TYPE_FUNC)
+        s.sid = self._new_sid()
         s.arity = len(fn.params)      # 记录形参个数，供调用处做参数个数检查
         self.symbols.global_scope.define(s)
         fn.symbol = s
@@ -120,8 +149,12 @@ class SemanticAnalyzer:
                 self.diagnostics.add(semantic_redeclared(p, fn.line, fn.line, fn.column, self._line(fn)))
                 continue
             seen.add(p)
+            pline, pcol = fn.line, fn.column
+            if i < len(fn.param_info):
+                _, pline, pcol = fn.param_info[i]
             s = sym.Symbol(p, sym.KIND_PARAMETER, self.current_scope,
-                           line=fn.line, column=fn.column, symbol_type=sym.TYPE_UNKNOWN)
+                           line=pline, column=pcol, symbol_type=sym.TYPE_UNKNOWN)
+            s.sid = self._new_sid()
             s.param_index = i
             self.current_scope.define(s)
         self._analyze_block(fn.body)
@@ -146,8 +179,19 @@ class SemanticAnalyzer:
         elif isinstance(stmt, ast.AssignStmt):
             self._assign(stmt)
         elif isinstance(stmt, ast.ExprStmt):
-            self._expr(stmt.expr)
+            # 独立的赋值语句在 parser 中被包成 ExprStmt(AssignStmt)
+            if isinstance(stmt.expr, ast.AssignStmt):
+                self._assign(stmt.expr)
+            else:
+                self._expr(stmt.expr)
         elif isinstance(stmt, ast.PrintStmt):
+            # print 是内置语句：把 print 名字本身也记为一次调用，供"查找引用"
+            ps = self.symbols.global_scope.lookup_local("print")
+            if ps is not None:
+                self.usages.append({
+                    "sid": ps.sid, "name": "print",
+                    "line": stmt.line, "column": stmt.column, "role": "call",
+                })
             for a in stmt.args:
                 self._expr(a)
         elif isinstance(stmt, ast.IfStmt):
@@ -200,8 +244,9 @@ class SemanticAnalyzer:
             self.diagnostics.add(warning_shadowing(
                 decl.name, outer.line, decl.line, decl.column, self._line(decl)))
         s = sym.Symbol(decl.name, sym.KIND_VARIABLE, self.current_scope,
-                       line=decl.line, column=decl.column, symbol_type=decl.expr_type,
-                       is_const=decl.is_const)
+                       line=decl.name_line, column=decl.name_column,
+                       symbol_type=decl.expr_type, is_const=decl.is_const)
+        s.sid = self._new_sid()
         self.current_scope.define(s)
         decl.symbol = s
 
@@ -214,9 +259,12 @@ class SemanticAnalyzer:
                 self.diagnostics.add(semantic_undefined_name(
                     name, self.symbols.collect_names(sym.KIND_BUILTIN), stmt.target.line,
                     stmt.target.column, self._line(stmt.target)))
+                self._record_unresolved(stmt.target)
                 return
+            # 赋值目标单独记为 assign 角色（不先走 _identifier，避免重复计数）
             if stmt.op == "=":
                 s.references += 1
+            self._record_usage(s, stmt.target, "assign")
             stmt.target.symbol = s
             if s.is_const or s.kind == sym.KIND_FUNCTION:
                 self.diagnostics.add(semantic_assign_to_const(
@@ -279,9 +327,11 @@ class SemanticAnalyzer:
         if s is None:
             self.diagnostics.add(semantic_undefined_name(
                 e.name, self.symbols.collect_names(sym.KIND_BUILTIN), e.line, e.column, self._line(e)))
+            self._record_unresolved(e)
             e.expr_type = sym.TYPE_UNKNOWN
             return e.expr_type
         s.references += 1
+        self._record_usage(s, e, "read")
         e.symbol = s
         e.expr_type = s.symbol_type
         return s.symbol_type
@@ -314,9 +364,11 @@ class SemanticAnalyzer:
                 self.diagnostics.add(semantic_undefined_name(
                     name, self.symbols.collect_names(sym.KIND_BUILTIN), e.callee.line,
                     e.callee.column, self._line(e.callee)))
+                self._record_unresolved(e.callee)
                 e.expr_type = sym.TYPE_UNKNOWN
                 return e.expr_type
             s.references += 1
+            self._record_usage(s, e.callee, "call")
             e.callee.symbol = s
             e.callee.expr_type = sym.TYPE_FUNC
             if s.kind == sym.KIND_BUILTIN:
@@ -333,6 +385,10 @@ class SemanticAnalyzer:
                         name, arity, len(e.args), e.line, e.column, self._line(e)))
                 e.expr_type = sym.TYPE_UNKNOWN
                 return e.expr_type
+            # 解析为变量/形参的标识符调用（如高阶用法 var f = add; f();）：
+            # 已在上方记录 call，必须返回，避免落到末尾把 callee 再当普通变量读一次
+            e.expr_type = sym.TYPE_UNKNOWN
+            return e.expr_type
         # 非标识符调用（如闭包/高阶），保守处理
         self._expr(e.callee)
         e.expr_type = sym.TYPE_UNKNOWN

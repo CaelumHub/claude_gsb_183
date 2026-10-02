@@ -139,10 +139,13 @@ class Parser:
         name = self._advance().text
         self._expect(T.LPAREN, "函数定义")
         params = []
+        param_info = []
         if not self._check(T.RPAREN):
             while True:
                 if self._check(T.IDENT):
-                    params.append(self._advance().text)
+                    ptok = self._advance()
+                    params.append(ptok.text)
+                    param_info.append((ptok.text, ptok.line, ptok.column))
                 else:
                     self._error_here("形参必须是标识符", "参数名用合法标识符。")
                     if self._check(T.EOF) or self._check(T.RPAREN):
@@ -156,7 +159,11 @@ class Parser:
         body = self._block()
         if body is None:
             body = ast.Block([], start.line, start.column)
-        return ast.FunctionDecl(name, params, body, start.line, start.column)
+        fn = ast.FunctionDecl(name, params, body, start.line, start.column)
+        # 名字自身的位置（供"定义跳转"精确定位到函数名，而不是 func 关键字）
+        fn.name_line, fn.name_column = name_tok.line, name_tok.column
+        fn.param_info = param_info
+        return fn
 
     # ------------------------------------------------------------------
     # 语句
@@ -232,7 +239,10 @@ class Parser:
                 self._error_here("变量初始化缺少表达式", "在 = 后面写一个表达式。")
         if consume_semi:
             self._expect(T.SEMICOLON, "变量声明")
-        return ast.VarDecl(name_tok.text, initializer, start.line, start.column)
+        decl = ast.VarDecl(name_tok.text, initializer, start.line, start.column)
+        # 变量名自身的位置（供"定义跳转"精确定位，而不是落在 var 关键字上）
+        decl.name_line, decl.name_column = name_tok.line, name_tok.column
+        return decl
 
     def _if_stmt(self):
         start = self._advance()  # if

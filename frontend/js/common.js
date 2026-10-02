@@ -143,6 +143,9 @@
     compile(source, detail) { return this.post("/api/compile", { source, detail: detail || "all" }); },
     run(source, options) { return this.post("/api/run", { source, options: options || {} }); },
 
+    // ---- 定义跳转 / 引用查找 ----
+    navigate(source) { return this.post("/api/navigate", { source }); },
+
     // ---- 调试 ----
     debugStart(source, breakpoints, pid, vid) { return this.post("/api/debug/start", { source, breakpoints: breakpoints || [], project_id: pid, version_id: vid }); },
     debugState(sid) { return this.get(`/api/debug/${sid}/state`); },

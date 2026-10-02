@@ -27,6 +27,7 @@ from . import debugger as debugger_mod
 from . import profiler as profiler_mod
 from . import diagnostics as diag
 from . import memory_model
+from . import navigation as navigation_mod
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +249,10 @@ class Service:
             view["bytecode"] = result.bytecode.to_dict()
             view["bytecode"]["functions"].reverse()
         return view
+
+    def navigate(self, source):
+        """定义跳转 / 引用查找数据：符号定义点、作用域、全部使用位置。"""
+        return navigation_mod.build_navigation(source)
 
     # ==================================================================
     # 运行（普通 / 性能剖析）

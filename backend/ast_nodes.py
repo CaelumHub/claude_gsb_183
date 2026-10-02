@@ -228,6 +228,8 @@ class VarDecl(Stmt):
     def __init__(self, name, initializer, line=1, column=1, is_const=False):
         super().__init__(line, column)
         self.name = name
+        self.name_line = line          # 变量名自身的位置（区别于 var 关键字位置，供定义跳转定位）
+        self.name_column = column
         self.initializer = initializer  # Expr or None
         self.is_const = is_const
         self.symbol = None
@@ -370,7 +372,10 @@ class FunctionDecl(Node):
     def __init__(self, name, params, body, line=1, column=1):
         super().__init__(line, column)
         self.name = name
+        self.name_line = line          # 函数名自身的位置（区别于 func 关键字位置）
+        self.name_column = column
         self.params = params        # List[str]
+        self.param_info = []        # List[(name, line, column)]：每个形参名的精确位置
         self.body = body            # Block
         self.symbol = None
 
